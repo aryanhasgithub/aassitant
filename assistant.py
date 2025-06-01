@@ -469,113 +469,116 @@ class EnhancedVoiceAssistant:
             return self._set_timer(command)
         return False
     def _set_alarm(self, command: str) -> bool:
-     """Set an alarm based on voice command"""
-     try:
-        # Enhanced pattern matching for various alarm formats
-        patterns = [
-            r'set alarm for (\d{1,2}):(\d{2})\s*(am|pm)?',  # "set alarm for 7:30 am"
-            r'set alarm for (\d{1,2})\s*(am|pm)',           # "set alarm for 7 am"
-            r'set alarm in (\d+) (minute|minutes|hour|hours)',  # "set alarm in 30 minutes"
-            r'wake me up at (\d{1,2}):(\d{2})\s*(am|pm)?',  # "wake me up at 7:30 am"
-            r'wake me up in (\d+) (minute|minutes|hour|hours)'  # "wake me up in 1 hour"
-        ]
-        
-        alarm_time = None
-        alarm_label = "Alarm"
-        
-        for pattern in patterns:
-            match = re.search(pattern, command.lower())
-            if match:
-                groups = match.groups()
-                
-                if "in" in pattern:  # Relative time (in X minutes/hours)
-                    duration = int(groups[0])
-                    unit = groups[1]
-                    
-                    if "hour" in unit:
-                        alarm_time = datetime.now() + timedelta(hours=duration)
-                        alarm_label = f"Alarm in {duration} {'hour' if duration == 1 else 'hours'}"
-                    else:  # minutes
-                        alarm_time = datetime.now() + timedelta(minutes=duration)
-                        alarm_label = f"Alarm in {duration} {'minute' if duration == 1 else 'minutes'}"
-                        
-                else:  # Absolute time (at specific time)
-                    hour = int(groups[0])
-                    minute = int(groups[1]) if len(groups) > 1 and groups[1] else 0
-                    am_pm = groups[2] if len(groups) > 2 else None
-                    
-                    # Handle 12-hour format
-                    if am_pm:
-                        if am_pm.lower() == 'pm' and hour != 12:
-                            hour += 12
-                        elif am_pm.lower() == 'am' and hour == 12:
-                            hour = 0
-                    
-                    # Create alarm time for today or tomorrow
-                    now = datetime.now()
-                    alarm_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                    
-                    # If time has passed today, set for tomorrow
-                    if alarm_time <= now:
-                        alarm_time += timedelta(days=1)
-                    
-                    time_str = alarm_time.strftime('%I:%M %p')
-                    alarm_label = f"Alarm for {time_str}"
-                
-                break
-        
-        if not alarm_time:
-            self.speak("Sorry, I couldn't understand the alarm time. Please try saying something like 'set alarm for 7:30 AM' or 'set alarm in 30 minutes'.")
-            return False
-        
-        # Store alarm in database
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            # Create alarms table if it doesn't exist
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS alarms (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    alarm_time TIMESTAMP NOT NULL,
-                    label TEXT NOT NULL,
-                    active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        """Set an alarm based on voice command"""
+        try:
+            # Enhanced pattern matching for various alarm formats
+            patterns = [
+                r'set alarm for (\d{1,2}):(\d{2})\s*(am|pm)?',      # "set alarm for 7:30 am"
+                r'set alarm for (\d{1,2})\s*(am|pm)',               # "set alarm for 7 am"
+                r'set alarm in (\d+) (minute|minutes|hour|hours)',  # "set alarm in 30 minutes"
+                r'wake me up at (\d{1,2}):(\d{2})\s*(am|pm)?',      # "wake me up at 7:30 am"
+                r'wake me up in (\d+) (minute|minutes|hour|hours)'  # "wake me up in 1 hour"
+            ]
+
+            alarm_time = None
+            alarm_label = "Alarm"
+
+            for pattern in patterns:
+                match = re.search(pattern, command.lower())
+                if match:
+                    groups = match.groups()
+
+                    if "in" in pattern:  # Relative time (in X minutes/hours)
+                        duration = int(groups[0])
+                        unit = groups[1]
+
+                        if "hour" in unit:
+                            alarm_time = datetime.now() + timedelta(hours=duration)
+                            alarm_label = f"Alarm in {duration} {'hour' if duration == 1 else 'hours'}"
+                        else:
+                            alarm_time = datetime.now() + timedelta(minutes=duration)
+                            alarm_label = f"Alarm in {duration} {'minute' if duration == 1 else 'minutes'}"
+
+                    else:  # Absolute time (at specific time)
+                        hour = int(groups[0])
+                        minute = int(groups[1]) if len(groups) > 1 and groups[1] else 0
+                        am_pm = groups[2] if len(groups) > 2 else None
+
+                        # Handle 12-hour format
+                        if am_pm:
+                            if am_pm.lower() == 'pm' and hour != 12:
+                                hour += 12
+                            elif am_pm.lower() == 'am' and hour == 12:
+                                hour = 0
+
+                        now = datetime.now()
+                        alarm_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+                        # If time has passed today, set for tomorrow
+                        if alarm_time <= now:
+                            alarm_time += timedelta(days=1)
+
+                        time_str = alarm_time.strftime('%I:%M %p')
+                        alarm_label = f"Alarm for {time_str}"
+
+                    break
+
+            if not alarm_time:
+                self.speak(
+                    "Sorry, I couldn't understand the alarm time. "
+                    "Please try saying something like 'set alarm for 7:30 AM' or 'set alarm in 30 minutes'."
                 )
-            """)
-            
-            cursor.execute(
-                "INSERT INTO alarms (alarm_time, label) VALUES (?, ?)",
-                (alarm_time.isoformat(), alarm_label)
+                return False
+
+            # Store alarm in database
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS alarms (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        alarm_time TIMESTAMP NOT NULL,
+                        label TEXT NOT NULL,
+                        active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                cursor.execute(
+                    "INSERT INTO alarms (alarm_time, label) VALUES (?, ?)",
+                    (alarm_time.isoformat(), alarm_label)
+                )
+                alarm_id = cursor.lastrowid
+                conn.commit()
+
+            # Start alarm thread
+            alarm_thread = threading.Thread(
+                target=self._alarm_worker,
+                args=(alarm_id, alarm_time, alarm_label),
+                daemon=True
             )
-            alarm_id = cursor.lastrowid
-            conn.commit()
-        
-        # Start alarm thread
-        alarm_thread = threading.Thread(
-            target=self._alarm_worker,
-            args=(alarm_id, alarm_time, alarm_label),
-            daemon=True
-        )
-        alarm_thread.start()
-        
-        # Confirmation message
-        time_until = alarm_time - datetime.now()
-        hours, remainder = divmod(int(time_until.total_seconds()), 3600)
-        minutes, _ = divmod(remainder, 60)
-        
-        if hours > 0:
-            time_desc = f"{hours} hour{'s' if hours != 1 else ''} and {minutes} minute{'s' if minutes != 1 else ''}"
-        else:
-            time_desc = f"{minutes} minute{'s' if minutes != 1 else ''}"
-        
-        self.speak(f"{alarm_label} set for {alarm_time.strftime('%I:%M %p')}. That's in {time_desc}.")
-        logger.info(f"Alarm set: {alarm_label} at {alarm_time}")
-        
-        return True
-        
-     except Exception as e:
-        logger.error(f"Alarm setting error: {e}")
-        self.speak("Sorry, I had trouble setting the alarm.")
-        return False
+            alarm_thread.start()
+
+            # Confirmation message
+            time_until = alarm_time - datetime.now()
+            hours, remainder = divmod(int(time_until.total_seconds()), 3600)
+            minutes, _ = divmod(remainder, 60)
+
+            if hours > 0:
+                time_desc = f"{hours} hour{'s' if hours != 1 else ''} and {minutes} minute{'s' if minutes != 1 else ''}"
+            else:
+                time_desc = f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+            self.speak(
+                f"{alarm_label} set for {alarm_time.strftime('%I:%M %p')}. "
+                f"That's in {time_desc}."
+            )
+            logger.info(f"Alarm set: {alarm_label} at {alarm_time}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Alarm setting error: {e}")
+            self.speak("Sorry, I had trouble setting the alarm.")
+            return False
 
 def _set_timer(self, command: str) -> bool:
     """Set a timer based on voice command"""
