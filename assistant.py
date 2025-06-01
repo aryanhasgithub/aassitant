@@ -572,7 +572,7 @@ class EnhancedVoiceAssistant:
         
         return True
         
-    except Exception as e:
+     except Exception as e:
         logger.error(f"Alarm setting error: {e}")
         self.speak("Sorry, I had trouble setting the alarm.")
         return False
