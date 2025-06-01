@@ -468,7 +468,330 @@ class EnhancedVoiceAssistant:
         elif "set timer" in command:
             return self._set_timer(command)
         return False
+    def _set_alarm(self, command: str) -> bool:
+    """Set an alarm based on voice command"""
+    try:
+        # Enhanced pattern matching for various alarm formats
+        patterns = [
+            r'set alarm for (\d{1,2}):(\d{2})\s*(am|pm)?',  # "set alarm for 7:30 am"
+            r'set alarm for (\d{1,2})\s*(am|pm)',           # "set alarm for 7 am"
+            r'set alarm in (\d+) (minute|minutes|hour|hours)',  # "set alarm in 30 minutes"
+            r'wake me up at (\d{1,2}):(\d{2})\s*(am|pm)?',  # "wake me up at 7:30 am"
+            r'wake me up in (\d+) (minute|minutes|hour|hours)'  # "wake me up in 1 hour"
+        ]
+        
+        alarm_time = None
+        alarm_label = "Alarm"
+        
+        for pattern in patterns:
+            match = re.search(pattern, command.lower())
+            if match:
+                groups = match.groups()
+                
+                if "in" in pattern:  # Relative time (in X minutes/hours)
+                    duration = int(groups[0])
+                    unit = groups[1]
+                    
+                    if "hour" in unit:
+                        alarm_time = datetime.now() + timedelta(hours=duration)
+                        alarm_label = f"Alarm in {duration} {'hour' if duration == 1 else 'hours'}"
+                    else:  # minutes
+                        alarm_time = datetime.now() + timedelta(minutes=duration)
+                        alarm_label = f"Alarm in {duration} {'minute' if duration == 1 else 'minutes'}"
+                        
+                else:  # Absolute time (at specific time)
+                    hour = int(groups[0])
+                    minute = int(groups[1]) if len(groups) > 1 and groups[1] else 0
+                    am_pm = groups[2] if len(groups) > 2 else None
+                    
+                    # Handle 12-hour format
+                    if am_pm:
+                        if am_pm.lower() == 'pm' and hour != 12:
+                            hour += 12
+                        elif am_pm.lower() == 'am' and hour == 12:
+                            hour = 0
+                    
+                    # Create alarm time for today or tomorrow
+                    now = datetime.now()
+                    alarm_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    
+                    # If time has passed today, set for tomorrow
+                    if alarm_time <= now:
+                        alarm_time += timedelta(days=1)
+                    
+                    time_str = alarm_time.strftime('%I:%M %p')
+                    alarm_label = f"Alarm for {time_str}"
+                
+                break
+        
+        if not alarm_time:
+            self.speak("Sorry, I couldn't understand the alarm time. Please try saying something like 'set alarm for 7:30 AM' or 'set alarm in 30 minutes'.")
+            return False
+        
+        # Store alarm in database
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # Create alarms table if it doesn't exist
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS alarms (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    alarm_time TIMESTAMP NOT NULL,
+                    label TEXT NOT NULL,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            cursor.execute(
+                "INSERT INTO alarms (alarm_time, label) VALUES (?, ?)",
+                (alarm_time.isoformat(), alarm_label)
+            )
+            alarm_id = cursor.lastrowid
+            conn.commit()
+        
+        # Start alarm thread
+        alarm_thread = threading.Thread(
+            target=self._alarm_worker,
+            args=(alarm_id, alarm_time, alarm_label),
+            daemon=True
+        )
+        alarm_thread.start()
+        
+        # Confirmation message
+        time_until = alarm_time - datetime.now()
+        hours, remainder = divmod(int(time_until.total_seconds()), 3600)
+        minutes, _ = divmod(remainder, 60)
+        
+        if hours > 0:
+            time_desc = f"{hours} hour{'s' if hours != 1 else ''} and {minutes} minute{'s' if minutes != 1 else ''}"
+        else:
+            time_desc = f"{minutes} minute{'s' if minutes != 1 else ''}"
+        
+        self.speak(f"{alarm_label} set for {alarm_time.strftime('%I:%M %p')}. That's in {time_desc}.")
+        logger.info(f"Alarm set: {alarm_label} at {alarm_time}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Alarm setting error: {e}")
+        self.speak("Sorry, I had trouble setting the alarm.")
+        return False
 
+def _set_timer(self, command: str) -> bool:
+    """Set a timer based on voice command"""
+    try:
+        # Pattern matching for timer formats
+        patterns = [
+            r'set timer for (\d+) (minute|minutes|hour|hours|second|seconds)',  # "set timer for 5 minutes"
+            r'timer (\d+) (minute|minutes|hour|hours|second|seconds)',          # "timer 30 seconds"
+            r'set (\d+) (minute|minutes|hour|hours|second|seconds) timer',      # "set 10 minute timer"
+            r'(\d+) (minute|minutes|hour|hours|second|seconds) timer'           # "5 minute timer"
+        ]
+        
+        duration_seconds = 0
+        timer_label = "Timer"
+        
+        for pattern in patterns:
+            match = re.search(pattern, command.lower())
+            if match:
+                amount = int(match.group(1))
+                unit = match.group(2)
+                
+                if "hour" in unit:
+                    duration_seconds = amount * 3600
+                    timer_label = f"{amount} {'hour' if amount == 1 else 'hours'} timer"
+                elif "minute" in unit:
+                    duration_seconds = amount * 60
+                    timer_label = f"{amount} {'minute' if amount == 1 else 'minutes'} timer"
+                else:  # seconds
+                    duration_seconds = amount
+                    timer_label = f"{amount} {'second' if amount == 1 else 'seconds'} timer"
+                
+                break
+        
+        if duration_seconds == 0:
+            self.speak("Sorry, I couldn't understand the timer duration. Please try saying something like 'set timer for 5 minutes' or 'timer 30 seconds'.")
+            return False
+        
+        # Calculate end time
+        end_time = datetime.now() + timedelta(seconds=duration_seconds)
+        
+        # Store timer in database
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # Create timers table if it doesn't exist
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS timers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    duration_seconds INTEGER NOT NULL,
+                    end_time TIMESTAMP NOT NULL,
+                    label TEXT NOT NULL,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            cursor.execute(
+                "INSERT INTO timers (duration_seconds, end_time, label) VALUES (?, ?, ?)",
+                (duration_seconds, end_time.isoformat(), timer_label)
+            )
+            timer_id = cursor.lastrowid
+            conn.commit()
+        
+        # Start timer thread
+        timer_thread = threading.Thread(
+            target=self._timer_worker,
+            args=(timer_id, duration_seconds, timer_label),
+            daemon=True
+        )
+        timer_thread.start()
+        
+        # Confirmation message
+        self.speak(f"{timer_label} started.")
+        logger.info(f"Timer set: {timer_label} for {duration_seconds} seconds")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Timer setting error: {e}")
+        self.speak("Sorry, I had trouble setting the timer.")
+        return False
+
+def _alarm_worker(self, alarm_id: int, alarm_time: datetime, label: str):
+    """Background worker for alarm"""
+    try:
+        # Wait until alarm time
+        while datetime.now() < alarm_time and self.is_running:
+            time.sleep(1)
+        
+        if not self.is_running:
+            return
+        
+        # Check if alarm is still active in database
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT active FROM alarms WHERE id = ?", (alarm_id,))
+            result = cursor.fetchone()
+            
+            if not result or not result[0]:
+                return  # Alarm was cancelled
+        
+        # Trigger alarm
+        logger.info(f"Alarm triggered: {label}")
+        
+        # Play alarm sound multiple times
+        alarm_messages = [
+            f"Alarm! {label}",
+            "Wake up! Your alarm is going off!",
+            "Time to wake up!",
+            "Alarm! Alarm! Wake up!"
+        ]
+        
+        for i, message in enumerate(alarm_messages):
+            if not self.is_running:
+                break
+                
+            self.speak(message)
+            
+            # Play alarm sound if available
+            try:
+                if os.path.exists('alarm_sound.mp3'):
+                    pygame.mixer.music.load('alarm_sound.mp3')
+                    pygame.mixer.music.play()
+                    time.sleep(2)  # Let sound play
+            except Exception as e:
+                logger.error(f"Alarm sound error: {e}")
+            
+            # Wait between repetitions (except last one)
+            if i < len(alarm_messages) - 1:
+                time.sleep(3)
+        
+        # Mark alarm as completed
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE alarms SET active = FALSE WHERE id = ?", (alarm_id,))
+            conn.commit()
+            
+    except Exception as e:
+        logger.error(f"Alarm worker error: {e}")
+
+def _timer_worker(self, timer_id: int, duration_seconds: int, label: str):
+    """Background worker for timer"""
+    try:
+        # Countdown
+        remaining = duration_seconds
+        
+        # Announce milestone updates for longer timers
+        milestones = []
+        if duration_seconds >= 3600:  # 1+ hours
+            milestones = [1800, 900, 300, 60]  # 30min, 15min, 5min, 1min remaining
+        elif duration_seconds >= 1800:  # 30+ minutes
+            milestones = [900, 300, 60]  # 15min, 5min, 1min remaining
+        elif duration_seconds >= 300:  # 5+ minutes
+            milestones = [60, 30]  # 1min, 30sec remaining
+        elif duration_seconds >= 60:  # 1+ minutes
+            milestones = [30, 10]  # 30sec, 10sec remaining
+        
+        while remaining > 0 and self.is_running:
+            # Check for milestone announcements
+            if remaining in milestones:
+                if remaining >= 60:
+                    minutes = remaining // 60
+                    self.speak(f"{minutes} {'minute' if minutes == 1 else 'minutes'} remaining on {label}")
+                else:
+                    self.speak(f"{remaining} seconds remaining on {label}")
+            
+            time.sleep(1)
+            remaining -= 1
+        
+        if not self.is_running:
+            return
+        
+        # Check if timer is still active
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT active FROM timers WHERE id = ?", (timer_id,))
+            result = cursor.fetchone()
+            
+            if not result or not result[0]:
+                return  # Timer was cancelled
+        
+        # Timer finished
+        logger.info(f"Timer finished: {label}")
+        
+        # Alert messages
+        timer_messages = [
+            f"Timer finished! {label} is complete.",
+            "Your timer has finished!",
+            "Time's up!"
+        ]
+        
+        for i, message in enumerate(timer_messages):
+            if not self.is_running:
+                break
+                
+            self.speak(message)
+            
+            # Play timer sound if available
+            try:
+                if os.path.exists('timer_sound.mp3'):
+                    pygame.mixer.music.load('timer_sound.mp3')
+                    pygame.mixer.music.play()
+                    time.sleep(1.5)
+            except Exception as e:
+                logger.error(f"Timer sound error: {e}")
+            
+            if i < len(timer_messages) - 1:
+                time.sleep(2)
+        
+        # Mark timer as completed
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE timers SET active = FALSE WHERE id = ?", (timer_id,))
+            conn.commit()
+            
+    except Exception as e:
+        logger.error(f"Timer worker error: {e}")
     def _handle_entertainment_commands(self, command: str) -> bool:
         """Handle entertainment commands"""
         if "play" in command:
