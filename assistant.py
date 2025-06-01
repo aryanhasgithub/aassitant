@@ -469,8 +469,8 @@ class EnhancedVoiceAssistant:
             return self._set_timer(command)
         return False
     def _set_alarm(self, command: str) -> bool:
-    """Set an alarm based on voice command"""
-    try:
+     """Set an alarm based on voice command"""
+     try:
         # Enhanced pattern matching for various alarm formats
         patterns = [
             r'set alarm for (\d{1,2}):(\d{2})\s*(am|pm)?',  # "set alarm for 7:30 am"
